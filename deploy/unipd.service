@@ -1,0 +1,45 @@
+[Unit]
+Description=UniProtocol relay server
+Documentation=https://github.com/uniprotocol/uniprotocol
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/unipd --port 443 --host %H --path /var/lib/uniprotocol/relay.key
+Restart=always
+RestartSec=5
+
+# Runs unprivileged. AmbientCapabilities is what lets it bind port 443 without being root —
+# the alternative, running the whole server as root, gives a process that handles untrusted
+# input from the internet far more authority than it needs.
+User=uniprotocol
+Group=uniprotocol
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+StateDirectory=uniprotocol
+StateDirectoryMode=0700
+
+# The relay forwards opaque ciphertext and needs almost nothing from the host.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# One connection per client, but a busy relay holds many of them at once.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

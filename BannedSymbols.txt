@@ -1,0 +1,47 @@
+; UniProtocol banned APIs — enforced as errors (RS0030) in every project.
+;
+; The whole protocol is testable without a network because the core depends only
+; on IPacketTransport, TimeProvider and IRandomSource. Every entry below is an API
+; that would silently reintroduce a hidden dependency on the real clock, the real
+; network or a non-reproducible random source, breaking deterministic simulation.
+;
+; Adapters at the system boundary DO need these APIs. They suppress the rule at the
+; exact call site with `#pragma warning disable RS0030` plus a comment naming the
+; adapter role. That makes every boundary crossing visible in a grep.
+
+; ---- Wall clock / monotonic clock: use TimeProvider ----
+P:System.DateTime.Now;Use TimeProvider.GetUtcNow(). The core must never read the ambient clock.
+P:System.DateTime.UtcNow;Use TimeProvider.GetUtcNow(). The core must never read the ambient clock.
+P:System.DateTime.Today;Use TimeProvider.GetUtcNow().
+P:System.DateTimeOffset.Now;Use TimeProvider.GetUtcNow().
+P:System.DateTimeOffset.UtcNow;Use TimeProvider.GetUtcNow().
+P:System.Environment.TickCount;Use TimeProvider.GetTimestamp().
+P:System.Environment.TickCount64;Use TimeProvider.GetTimestamp().
+T:System.Diagnostics.Stopwatch;Use TimeProvider.GetTimestamp()/GetElapsedTime(); Stopwatch is not virtualizable.
+
+; ---- Delays and timers: use TimeProvider overloads or the endpoint timer wheel ----
+M:System.Threading.Thread.Sleep(System.Int32);Blocking sleep. Use TimeProvider-based delays.
+M:System.Threading.Thread.Sleep(System.TimeSpan);Blocking sleep. Use TimeProvider-based delays.
+M:System.Threading.Tasks.Task.Delay(System.Int32);Use Task.Delay(TimeSpan, TimeProvider, CancellationToken).
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan);Use Task.Delay(TimeSpan, TimeProvider, CancellationToken).
+M:System.Threading.Tasks.Task.Delay(System.Int32,System.Threading.CancellationToken);Use the TimeProvider overload.
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.Threading.CancellationToken);Use the TimeProvider overload.
+T:System.Threading.Timer;Use the endpoint timer wheel driven by TimeProvider.
+T:System.Timers.Timer;Use the endpoint timer wheel driven by TimeProvider.
+
+; ---- Randomness: must be seedable so failing simulator runs replay exactly ----
+T:System.Random;Use IRandomSource (seedable). Simulator runs must be reproducible from a seed.
+T:System.Security.Cryptography.RandomNumberGenerator;Use IRandomSource / ISecureRandom so tests can pin the seed.
+M:System.Guid.NewGuid;Non-reproducible. Derive identifiers from IRandomSource.
+
+; ---- Network: the core talks to IPacketTransport, never to a socket ----
+T:System.Net.Sockets.Socket;Core code uses IPacketTransport. Only transport adapters may touch Socket.
+T:System.Net.Sockets.UdpClient;Core code uses IPacketTransport.
+T:System.Net.Sockets.TcpClient;Core code uses IStreamTransport.
+T:System.Net.Sockets.TcpListener;Core code uses IStreamTransport.
+T:System.Net.Dns;Name resolution belongs behind INameResolver so tests stay offline.
+
+; ---- Culture-sensitive formatting in a wire protocol is a correctness bug ----
+M:System.String.Format(System.String,System.Object);Pass an explicit IFormatProvider (CultureInfo.InvariantCulture).
+M:System.String.ToLower;Use ToLowerInvariant().
+M:System.String.ToUpper;Use ToUpperInvariant().

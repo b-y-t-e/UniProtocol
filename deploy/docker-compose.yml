@@ -1,0 +1,32 @@
+services:
+  unipd:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: uniprotocol/unipd:latest
+    restart: unless-stopped
+
+    # The container listens on 8443 as an unprivileged user; the host maps 443 onto it, which
+    # is the port least likely to be blocked by the networks clients sit behind.
+    ports:
+      - "443:8443"
+
+    # The relay's identity must survive restarts: clients pin it, so a new key means every
+    # relay address you handed out stops working.
+    volumes:
+      - relay-key:/var/lib/uniprotocol
+
+    # The relay binds 8443 but is reached on 443, so it must advertise 443: the address it
+    # prints is what clients dial, and one naming the container's port would be unusable.
+    command:
+      - "--port"
+      - "8443"
+      - "--advertise-port"
+      - "443"
+      - "--path"
+      - "/var/lib/uniprotocol/relay.key"
+      - "--host"
+      - "${RELAY_PUBLIC_HOST:?set RELAY_PUBLIC_HOST to the name or IP clients will use}"
+
+volumes:
+  relay-key:

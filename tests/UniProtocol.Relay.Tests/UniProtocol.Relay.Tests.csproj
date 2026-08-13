@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>UniProtocol.Relay.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UniProtocol\UniProtocol.csproj" />
+    <ProjectReference Include="..\..\src\UniProtocol.Server\UniProtocol.Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UniProtocol.Cli/UniProtocol.Cli.csproj" />
+    <Project Path="src/UniProtocol.Crypto/UniProtocol.Crypto.csproj" />
+    <Project Path="src/UniProtocol.Protocol/UniProtocol.Protocol.csproj" />
+    <Project Path="src/UniProtocol.Server.Host/UniProtocol.Server.Host.csproj" />
+    <Project Path="src/UniProtocol.Server/UniProtocol.Server.csproj" />
+    <Project Path="src/UniProtocol/UniProtocol.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/UniProtocol.Crypto.Tests/UniProtocol.Crypto.Tests.csproj" />
+    <Project Path="tests/UniProtocol.Protocol.Tests/UniProtocol.Protocol.Tests.csproj" />
+    <Project Path="tests/UniProtocol.Relay.Tests/UniProtocol.Relay.Tests.csproj" />
+    <Project Path="tests/UniProtocol.Tests/UniProtocol.Tests.csproj" />
+  </Folder>
+</Solution>

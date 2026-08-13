@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>UniProtocol.Crypto</RootNamespace>
+    <Description>Managed cryptographic primitives for UniProtocol: X25519, Ed25519, BLAKE2, ChaCha20-Poly1305 and the Noise_IK handshake. No native dependencies.</Description>
+    <!--
+      Constant-time code must not be perturbed by the JIT zero-initializing locals,
+      and the stack buffers here are always fully written before being read.
+    -->
+    <SkipLocalsInit>true</SkipLocalsInit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="UniProtocol.Crypto.Tests" />
+    <InternalsVisibleTo Include="UniProtocol.Benchmarks" />
+  </ItemGroup>
+
+</Project>

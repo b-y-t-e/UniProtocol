@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>UniProtocol.Protocol</RootNamespace>
+    <Description>Wire types shared by UniProtocol clients and servers: node identity, packet headers, frames and signed records.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UniProtocol.Crypto\UniProtocol.Crypto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="UniProtocol.Protocol.Tests" />
+  </ItemGroup>
+
+</Project>

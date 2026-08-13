@@ -1,0 +1,53 @@
+<Project>
+
+  <!--
+    Analyzers are applied to every project rather than opted into per project, so a
+    new project cannot silently escape the rules described in docs/design-rules.md.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+  </ItemGroup>
+
+  <!--
+    Source Link only matters for published packages, and on a working copy with no remote
+    (or no commits yet) it emits warnings on every build. Restrict it to CI, where both
+    exist and the symbols are actually shipped.
+  -->
+  <ItemGroup Condition="'$(CI)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!--
+    Public API tracking (PublicAPI.Shipped.txt) is switched on in M7, when the first
+    NuGet packages ship and the surface actually becomes a compatibility promise.
+    Turning it on during 0.x would mean hand-maintaining the file on every commit
+    for no benefit, so until then the discipline is "internal by default".
+    Opt in per project with <TrackPublicApi>true</TrackPublicApi>.
+  -->
+  <ItemGroup Condition="'$(TrackPublicApi)' == 'true'">
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" Condition="Exists('PublicAPI.Shipped.txt')" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" Condition="Exists('PublicAPI.Unshipped.txt')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <IsPackable>false</IsPackable>
+    <IsTrimmable>false</IsTrimmable>
+    <IsAotCompatible>false</IsAotCompatible>
+    <!-- Test assemblies are never trimmed or AOT-published, so the analyzers only add noise. -->
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Tests deliberately exercise banned APIs (real sockets, real clocks) at the edges. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

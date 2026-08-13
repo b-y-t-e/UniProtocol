@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>UniProtocol</RootNamespace>
+    <Description>Peer-to-peer connectivity for .NET: dial a device by its public key, over any network, with traffic taking the most direct path available.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UniProtocol.Protocol\UniProtocol.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="UniProtocol.Tests" />
+    <InternalsVisibleTo Include="UniProtocol.TestKit" />
+    <InternalsVisibleTo Include="UniProtocol.Benchmarks" />
+  </ItemGroup>
+
+</Project>

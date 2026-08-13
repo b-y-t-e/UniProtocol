@@ -1,0 +1,121 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,props,targets,csproj,slnx,xml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+indent_size = 4
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_space_after_cast = false
+csharp_preserve_single_line_statements = false
+
+# ---- Language style ----
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+csharp_using_directive_placement = outside_namespace:error
+csharp_style_namespace_declarations = file_scoped:error
+csharp_prefer_braces = true:error
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:silent
+csharp_style_prefer_readonly_struct = true:error
+csharp_style_prefer_readonly_struct_member = true:error
+csharp_prefer_static_local_function = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_unused_value_expression_statement_preference = discard_variable:suggestion
+dotnet_style_readonly_field = true:error
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:error
+dotnet_style_qualification_for_field = false:silent
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = false:silent
+dotnet_style_prefer_conditional_expression_over_return = false:silent
+
+# ---- Naming: interfaces I-prefixed, private fields _camelCase, constants PascalCase ----
+dotnet_naming_rule.interfaces_start_with_i.severity = error
+dotnet_naming_rule.interfaces_start_with_i.symbols = interface_symbols
+dotnet_naming_rule.interfaces_start_with_i.style = i_prefixed
+dotnet_naming_symbols.interface_symbols.applicable_kinds = interface
+dotnet_naming_style.i_prefixed.required_prefix = I
+dotnet_naming_style.i_prefixed.capitalization = pascal_case
+
+dotnet_naming_rule.private_fields_underscore.severity = error
+dotnet_naming_rule.private_fields_underscore.symbols = private_field_symbols
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel
+dotnet_naming_symbols.private_field_symbols.applicable_kinds = field
+dotnet_naming_symbols.private_field_symbols.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel.required_prefix = _
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+
+dotnet_naming_rule.types_pascal.severity = error
+dotnet_naming_rule.types_pascal.symbols = type_symbols
+dotnet_naming_rule.types_pascal.style = pascal
+dotnet_naming_symbols.type_symbols.applicable_kinds = class,struct,enum,delegate,method,property,event
+dotnet_naming_style.pascal.capitalization = pascal_case
+
+# ---- Analyzer severities ----
+# RS0030: banned API. This is the mechanism enforcing "the core never touches the
+# clock, the socket or an unseeded RNG" — it must be an error, never a warning.
+dotnet_diagnostic.RS0030.severity = error
+# RS0016/RS0017: public API surface must be declared in PublicAPI.*.txt.
+dotnet_diagnostic.RS0016.severity = error
+dotnet_diagnostic.RS0017.severity = error
+
+# CA1062: null checks on public args — we use nullable reference types instead.
+dotnet_diagnostic.CA1062.severity = none
+# CA1303: literal strings in exceptions do not need resource lookup here.
+dotnet_diagnostic.CA1303.severity = none
+# CA1707: underscores in test method names are the convention (Method_Condition_Result).
+dotnet_diagnostic.CA1707.severity = none
+# IDE0290: primary constructors are a judgement call, not a rule.
+dotnet_diagnostic.IDE0290.severity = none
+# CA1305/CA1310: culture must always be explicit in a wire protocol.
+dotnet_diagnostic.CA1305.severity = error
+dotnet_diagnostic.CA1310.severity = error
+# CA2007: ConfigureAwait — the library has no sync context; enforce it anyway for
+# consumers that do (WPF/MAUI callers must not be forced back onto the UI thread).
+dotnet_diagnostic.CA2007.severity = error
+
+[tests/**.cs]
+# Tests are the one place that legitimately needs real sockets and real clocks at
+# the boundary, and xUnit already runs without a synchronization context.
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CA1819.severity = none
+
+[bench/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1822.severity = none
+
+# CA2007 (ConfigureAwait) exists to stop a library from forcing a caller back onto a
+# captured synchronization context. Console applications and samples have no such context,
+# so the rule only adds noise to `await using` declarations there. It stays an error for
+# the libraries, which is where it matters.
+#
+# The globs use `**.cs` rather than `**/*.cs`: in EditorConfig `**` matches any run of
+# characters including separators, but `**/` still requires a separator, so `**/*.cs` skips
+# files sitting directly in the project directory.
+[src/UniProtocol.Cli/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+
+[src/UniProtocol.Server.Host/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+
+[samples/**.cs]
+dotnet_diagnostic.CA2007.severity = none

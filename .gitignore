@@ -1,0 +1,47 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Rider / VS / VS Code
+.vs/
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+## Test & coverage
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.trx
+BenchmarkDotNet.Artifacts/
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages/build/
+
+## Fuzzing corpora are large and regenerated
+tests/UniProtocol.Fuzz/findings/
+tests/UniProtocol.Fuzz/corpus-generated/
+
+## Local secrets & node keys — never commit private keys
+*.key
+*.pem
+secrets.json
+appsettings.Local.json
+
+## OS
+.DS_Store
+Thumbs.db

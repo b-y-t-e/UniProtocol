@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>UniProtocol.Server</RootNamespace>
+    <Description>The UniProtocol relay server: forwards encrypted packets between nodes that cannot reach each other directly.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UniProtocol.Protocol\UniProtocol.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="UniProtocol.Server.Tests" />
+  </ItemGroup>
+
+</Project>
