@@ -26,6 +26,13 @@ public sealed class FileKeyStore : IKeyStore
 {
     private const string FormatHeader = "uniprotocol-key-v1";
 
+    /// <summary>Suffix of the files a save is staged in before one replaces the real one.</summary>
+    /// <remarks>
+    /// The full name has a random component in front of this, so two processes saving at once
+    /// cannot pick the same staging file. Public so that cleanup and tests can recognise one.
+    /// </remarks>
+    public const string TemporarySuffix = ".tmp";
+
     private readonly string _path;
 
     /// <summary>Creates a store backed by the file at <paramref name="path"/>.</summary>
@@ -91,28 +98,96 @@ public sealed class FileKeyStore : IKeyStore
         Base32.Encode(seed, encoded);
         CryptographicOperations.ZeroMemory(seed);
 
-        // Create the file with owner-only permissions before writing, so the secret is
-        // never briefly world-readable. Writing first and chmod-ing after would leave
-        // exactly that window.
-        CreateOwnerOnlyFile(_path);
-        File.WriteAllText(_path, $"{FormatHeader}{Environment.NewLine}{new string(encoded)}{Environment.NewLine}");
+        // Written to a staging file and then moved into place. Truncating the real file and
+        // writing into it is the one mistake here whose damage cannot be undone: a crash, a
+        // full disk or a power cut between the two leaves an empty key file, and the identity
+        // it held is gone — every ticket naming it, and for a relay every client that pinned
+        // it, is dead. A move within one directory is atomic on both Windows and POSIX, so a
+        // reader sees either the old key or the new one and never a half-written one.
+        //
+        // The staging name is unique rather than fixed. Two processes pointed at the same key
+        // file — two unipd instances, or a service racing an operator running the CLI — would
+        // otherwise choose the same path and one would truncate the file the other was
+        // partway through writing. A random name also removes the need to clear a leftover
+        // first, which was itself a race between the check and the create.
+        //
+        // Path.GetRandomFileName is not the seeded IRandomSource the rest of the codebase
+        // uses, and should not be: this names a file, never anything a peer observes or a
+        // simulator has to reproduce, and a reproducible name would defeat the whole point.
+        string temporaryPath = _path + "." + Path.GetRandomFileName() + TemporarySuffix;
 
-        encoded.Clear();
+        try
+        {
+            // CreateNew, never Create. An access list — and a Unix mode — is applied only
+            // when a file is *created*: opening an existing one keeps whatever permissions it
+            // already had, and File.Move then carries those onto the key. Under ProgramData
+            // that would mean every local account could read the relay's private key.
+            using (FileStream stream = CreateOwnerOnlyFile(temporaryPath))
+            {
+                using (StreamWriter writer = new(stream, leaveOpen: true))
+                {
+                    // Written through the handle that carries the permissions, so the secret
+                    // is never on disk under any others, not even briefly.
+                    writer.Write(FormatHeader);
+                    writer.Write(Environment.NewLine);
+                    writer.Write(encoded);
+                    writer.Write(Environment.NewLine);
+                }
+
+                // Forced to the platter before the rename. Without it the move can be durable
+                // while the bytes it points at are not, and a crash leaves a key file that
+                // exists, is the right length, and is full of zeros — the exact outcome the
+                // staging file was introduced to prevent.
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, _path, overwrite: true);
+        }
+        catch
+        {
+            TryDelete(temporaryPath);
+            throw;
+        }
+        finally
+        {
+            encoded.Clear();
+        }
     }
 
-    private static void CreateOwnerOnlyFile(string path)
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+#pragma warning disable CA1031 // Cleaning up after a failed save must not mask the failure.
+        catch (Exception)
+        {
+            // The temporary file is left behind; the next save overwrites it.
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>
+    /// Creates a new file readable only by its owner and returns the handle to write through.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FileMode.CreateNew"/>, never <see cref="FileMode.Create"/>: permissions are
+    /// applied at creation only, so reusing an existing file silently keeps that file's
+    /// permissions.
+    /// </remarks>
+    private static FileStream CreateOwnerOnlyFile(string path)
     {
         if (OperatingSystem.IsWindows())
         {
-            CreateOwnerOnlyFileOnWindows(path);
-            return;
+            return CreateOwnerOnlyFileOnWindows(path);
         }
 
-        using FileStream stream = new(
+        return new FileStream(
             path,
             new FileStreamOptions
             {
-                Mode = FileMode.Create,
+                Mode = FileMode.CreateNew,
                 Access = FileAccess.Write,
                 UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
             });
@@ -129,7 +204,7 @@ public sealed class FileKeyStore : IKeyStore
     /// relay's private key to every account on the machine.
     /// </remarks>
     [SupportedOSPlatform("windows")]
-    private static void CreateOwnerOnlyFileOnWindows(string path)
+    private static FileStream CreateOwnerOnlyFileOnWindows(string path)
     {
         using WindowsIdentity owner = WindowsIdentity.GetCurrent();
 
@@ -140,11 +215,11 @@ public sealed class FileKeyStore : IKeyStore
             FileSystemRights.FullControl,
             AccessControlType.Allow));
 
-        using FileStream stream = new FileInfo(path).Create(
-            FileMode.Create,
+        return new FileInfo(path).Create(
+            FileMode.CreateNew,
             FileSystemRights.WriteData | FileSystemRights.WriteAttributes,
             FileShare.None,
-            bufferSize: 1,
+            bufferSize: 4096,
             FileOptions.None,
             security);
     }

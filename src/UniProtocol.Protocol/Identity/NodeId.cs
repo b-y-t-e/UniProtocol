@@ -102,10 +102,14 @@ public readonly struct NodeId : IEquatable<NodeId>, ISpanFormattable
     /// <inheritdoc />
     public override int GetHashCode()
     {
-        // A public key is uniformly distributed, so its first four bytes are already a
-        // good hash and there is nothing to gain from mixing further.
-        ReadOnlySpan<byte> bytes = _value;
-        return System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes);
+        // All 32 bytes, not just the first four. An honest peer's key is uniformly
+        // distributed and any four bytes of it would do — but a relay keys its client table
+        // by identities that its clients choose, and generating keys that agree in four
+        // given bytes costs an attacker nothing worth counting. Mixing the whole key makes
+        // the table's worst case something nobody can arrange.
+        HashCode hash = default;
+        hash.AddBytes(_value);
+        return hash.ToHashCode();
     }
 
     /// <summary>Compares two identities.</summary>

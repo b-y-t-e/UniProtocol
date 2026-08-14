@@ -89,4 +89,40 @@ public sealed class NodeIdTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => NodeId.FromPublicKey(new byte[31]));
     }
+
+    [Fact]
+    public void GetHashCode_KeysDifferingOnlyBeyondTheFirstFourBytes_DoNotCollide()
+    {
+        // A relay keys its client table by identities its clients choose, and grinding out
+        // keys that agree in four given bytes costs an attacker nothing worth counting. A
+        // hash that reads only those four bytes turns that into every client landing in one
+        // bucket.
+        byte[] first = new byte[NodeId.SizeInBytes];
+        byte[] second = new byte[NodeId.SizeInBytes];
+
+        for (int i = 0; i < NodeId.SizeInBytes; i++)
+        {
+            first[i] = (byte)i;
+            second[i] = (byte)i;
+        }
+
+        second[^1] ^= 0xFF;
+
+        NodeId a = NodeId.FromPublicKey(first);
+        NodeId b = NodeId.FromPublicKey(second);
+
+        Assert.NotEqual(a, b);
+        Assert.NotEqual(a.GetHashCode(), b.GetHashCode());
+    }
+
+    [Fact]
+    public void GetHashCode_TheSameKey_IsStable()
+    {
+        byte[] key = new byte[NodeId.SizeInBytes];
+        key.AsSpan().Fill(0x42);
+
+        Assert.Equal(
+            NodeId.FromPublicKey(key).GetHashCode(),
+            NodeId.FromPublicKey(key).GetHashCode());
+    }
 }
