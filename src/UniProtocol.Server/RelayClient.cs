@@ -20,19 +20,44 @@ internal sealed class RelayClient : IAsyncDisposable
     private readonly Channel<QueuedPacket> _outbound;
     private readonly TokenBucket _rateLimit;
     private readonly CancellationTokenSource _closed = new();
+    private readonly TimeSpan _idleTimeout;
 
-    private bool _isDisposed;
+    /// <summary>
+    /// Closes the connection when nothing has been heard for <see cref="_idleTimeout"/>.
+    /// </summary>
+    /// <remarks>
+    /// A timer reset per frame rather than a deadline per read: a client under load sends
+    /// hundreds of frames a second, and allocating a cancellation source for each of them to
+    /// enforce a ninety-second limit is work out of all proportion to the job.
+    /// </remarks>
+    private readonly ITimer _idleTimer;
+
+    /// <summary>
+    /// Non-zero once disposed; an int because the transition is read from the timer callback
+    /// thread and made from whichever thread ends the connection.
+    /// </summary>
+    private int _disposeState;
 
     public RelayClient(
         RelayConnection connection,
         NodeId nodeId,
         int sendQueueCapacity,
         int packetsPerSecond,
+        TimeSpan idleTimeout,
         TimeProvider timeProvider)
     {
         _connection = connection;
         NodeId = nodeId;
         _rateLimit = new TokenBucket(packetsPerSecond, timeProvider);
+        _idleTimeout = idleTimeout;
+
+        // Created stopped; the read loop arms it. A client that never gets that far is
+        // already bounded by the handshake timeout.
+        _idleTimer = timeProvider.CreateTimer(
+            static state => ((RelayClient)state!).OnIdle(),
+            this,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
 
         _outbound = Channel.CreateBounded<QueuedPacket>(
             new BoundedChannelOptions(sendQueueCapacity)
@@ -60,6 +85,24 @@ internal sealed class RelayClient : IAsyncDisposable
         {
             ArrayPool<byte>.Shared.Return(copy);
         }
+    }
+
+    /// <summary>
+    /// Tells this client that a node it addressed is not connected here.
+    /// </summary>
+    /// <remarks>
+    /// Sent straight down the connection rather than through the outbound queue, because the
+    /// queue exists to absorb bursts of forwarded traffic and this is an answer to something
+    /// the client just asked. Sends are serialised inside the connection, so this cannot
+    /// interleave with the write loop. It is not an amplification vector either: the reply is
+    /// smaller than the frame that provoked it and is already behind the rate limit.
+    /// </remarks>
+    public ValueTask SendPeerGoneAsync(NodeId missing)
+    {
+        byte[] payload = new byte[NodeId.SizeInBytes];
+        missing.CopyTo(payload);
+
+        return _connection.SendAsync(RelayFrameType.PeerGone, payload, _closed.Token);
     }
 
     /// <summary>Runs the read and write loops until the connection ends.</summary>
@@ -91,12 +134,16 @@ internal sealed class RelayClient : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (_isDisposed)
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
         {
             return;
         }
 
-        _isDisposed = true;
+        // Disposed first, and awaited: DisposeAsync on a timer does not return until any
+        // callback already running has finished. Cancelling the source before that could put
+        // OnIdle on a disposed source. The flag alone cannot close that window — the callback
+        // may have passed its check already.
+        await _idleTimer.DisposeAsync().ConfigureAwait(false);
 
         await _closed.CancelAsync().ConfigureAwait(false);
         _outbound.Writer.TryComplete();
@@ -116,10 +163,16 @@ internal sealed class RelayClient : IAsyncDisposable
     {
         byte[] buffer = new byte[RelayProtocol.MaximumFrameSizeInBytes];
 
+        ResetIdleTimer();
+
         while (!cancellationToken.IsCancellationRequested)
         {
             RelayFrame frame = await _connection.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
             ReadOnlyMemory<byte> payload = buffer.AsMemory(1, frame.PayloadLength);
+
+            // Any frame counts as a sign of life, keep-alives included — that is what they
+            // are for.
+            ResetIdleTimer();
 
             switch (frame.Type)
             {
@@ -137,6 +190,16 @@ internal sealed class RelayClient : IAsyncDisposable
                     break;
 
                 case RelayFrameType.Ping:
+                    // Behind the same rate limit as forwarding. A Pong echoes the ping's
+                    // payload, which the client chooses and which may be the largest frame
+                    // the protocol allows — so an unlimited ping is an unlimited demand on
+                    // the server's CPU and uplink, and the one exchange in the protocol where
+                    // a client can make the server send as much as it likes.
+                    if (!_rateLimit.TryConsume())
+                    {
+                        break;
+                    }
+
                     await _connection.SendAsync(RelayFrameType.Pong, payload, cancellationToken).ConfigureAwait(false);
                     break;
 
@@ -174,6 +237,42 @@ internal sealed class RelayClient : IAsyncDisposable
             {
                 queued.Return();
             }
+        }
+    }
+
+    private void ResetIdleTimer()
+    {
+        try
+        {
+            _idleTimer.Change(_idleTimeout, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The client was disposed between the check and the call. Rearming a timer that
+            // no longer exists is exactly as harmless as it sounds.
+        }
+    }
+
+    /// <summary>Ends a connection that has gone silent.</summary>
+    /// <remarks>
+    /// The socket may look open indefinitely after the peer has gone — a laptop closed, a
+    /// mobile network handing over — and nothing else on the server would ever notice.
+    /// </remarks>
+    private void OnIdle()
+    {
+        if (Volatile.Read(ref _disposeState) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _closed.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal won the race. There is nothing left to cancel, which is the outcome
+            // this method wanted anyway.
         }
     }
 

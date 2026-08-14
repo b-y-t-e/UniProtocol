@@ -43,4 +43,51 @@ public sealed record RelayServerOptions
 
     /// <summary>Maximum number of clients connected at once.</summary>
     public int MaximumClients { get; init; } = 10_000;
+
+    /// <summary>
+    /// Maximum number of connections that have been accepted but have not yet completed the
+    /// relay handshake.
+    /// </summary>
+    /// <remarks>
+    /// The client limit alone does not bound anything an attacker has to work for: a
+    /// connection only counts against it once it has authenticated, so opening sockets and
+    /// never finishing the handshake costs a file descriptor and a buffer each and is not
+    /// counted at all. This is the limit that a flood actually meets. It is generous relative
+    /// to any real burst of arrivals, because handshakes complete in a round trip.
+    /// </remarks>
+    public int MaximumPendingHandshakes { get; init; } = 512;
+
+    /// <summary>
+    /// Maximum number of connections one remote address may hold at once, authenticated or not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Keeps a single source from consuming the whole pending-handshake budget. Set high
+    /// enough for the legitimate case of many devices behind one NAT.
+    /// </para>
+    /// <para>
+    /// <strong>The remote address is not a reliable stand-in for "one party".</strong> Behind
+    /// carrier-grade NAT, a corporate egress or a proxy, thousands of unrelated clients share
+    /// one address, and this limit will cut off honest devices long before it inconveniences
+    /// anyone. From the other side, an attacker with a /64 of IPv6 — which is what a single
+    /// cheap host is handed — gets the full allowance per address and can simply move.
+    /// </para>
+    /// <para>
+    /// It is kept because it raises the cost of the easy case, not because it is a real
+    /// defence. The limit that actually holds under a flood is
+    /// <see cref="MaximumPendingHandshakes"/>, which is global. A deployment that expects
+    /// clients behind shared addresses should raise this or disable it by setting it to
+    /// <see cref="int.MaxValue"/>; one facing the open internet should leave it and rely on
+    /// the global limit for the rest.
+    /// </para>
+    /// </remarks>
+    public int MaximumConnectionsPerAddress { get; init; } = 64;
+
+    /// <summary>How long a connection may be silent before the server closes it.</summary>
+    /// <remarks>
+    /// Clients send a keep-alive every <see cref="RelayProtocol.KeepAliveInterval"/>, so
+    /// silence past this means the peer is gone and the socket is a ghost the operating
+    /// system has not noticed. Without it those accumulate for the life of the process.
+    /// </remarks>
+    public TimeSpan IdleTimeout { get; init; } = RelayProtocol.IdleTimeout;
 }

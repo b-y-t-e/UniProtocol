@@ -35,8 +35,16 @@ public sealed partial class RelayServer : IAsyncDisposable
     private readonly Socket _listener;
     private readonly ILogger<RelayServer> _logger;
     private readonly ConcurrentDictionary<NodeId, RelayClient> _clients = new();
+
+    /// <summary>How many connections each remote address currently holds.</summary>
+    /// <remarks>
+    /// Counted by address rather than by identity because an unauthenticated connection has
+    /// no identity yet — and that is precisely the connection a flood consists of.
+    /// </remarks>
+    private readonly ConcurrentDictionary<IPAddress, int> _connectionsPerAddress = new();
     private readonly CancellationTokenSource _shutdown = new();
 
+    private int _pendingHandshakes;
     private Task? _acceptLoop;
     private bool _isDisposed;
 
@@ -58,6 +66,15 @@ public sealed partial class RelayServer : IAsyncDisposable
 
     /// <summary>How many clients are connected right now.</summary>
     public int ConnectedClientCount => _clients.Count;
+
+    /// <summary>
+    /// How many accepted connections have not yet completed the relay handshake.
+    /// </summary>
+    /// <remarks>
+    /// The number that matters under a flood: unlike <see cref="ConnectedClientCount"/> it
+    /// counts connections nobody has had to authenticate for.
+    /// </remarks>
+    public int PendingHandshakeCount => Volatile.Read(ref _pendingHandshakes);
 
     /// <summary>Binds the listening socket and starts accepting.</summary>
     public static RelayServer Start(RelayServerOptions options)
@@ -157,18 +174,25 @@ public sealed partial class RelayServer : IAsyncDisposable
     {
         socket.NoDelay = true;
 
+        IPAddress remoteAddress = (socket.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
+
         NetworkStream stream = new(socket, ownsSocket: true);
         RelayConnection? connection = null;
 
+        // Admission is decided before anything is read, and every counter it touches is
+        // released in the finally below. A connection that is turned away here has cost the
+        // server one accept and one close.
+        if (!TryAdmit(remoteAddress, out string? rejection))
+        {
+            LogClientRejected(rejection);
+            await stream.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        bool isHandshaking = true;
+
         try
         {
-            if (_clients.Count >= _options.MaximumClients)
-            {
-                LogClientRejected("the server is at its client limit");
-                await stream.DisposeAsync().ConfigureAwait(false);
-                return;
-            }
-
             using CancellationTokenSource handshakeTimeout = new(TimeSpan.FromSeconds(10), _options.TimeProvider);
             using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
@@ -177,6 +201,11 @@ public sealed partial class RelayServer : IAsyncDisposable
             connection = await RelayConnection
                 .AcceptAsync(stream, _options.Identity, cancellationToken: linked.Token)
                 .ConfigureAwait(false);
+
+            // The handshake budget is for connections still proving who they are. Holding a
+            // slot for the whole session would make it a second, much lower, client limit.
+            Interlocked.Decrement(ref _pendingHandshakes);
+            isHandshaking = false;
 
             await ServeClientAsync(connection, cancellationToken).ConfigureAwait(false);
         }
@@ -193,6 +222,13 @@ public sealed partial class RelayServer : IAsyncDisposable
         }
         finally
         {
+            if (isHandshaking)
+            {
+                Interlocked.Decrement(ref _pendingHandshakes);
+            }
+
+            ReleaseAddress(remoteAddress);
+
             if (connection is not null)
             {
                 await connection.DisposeAsync().ConfigureAwait(false);
@@ -201,6 +237,54 @@ public sealed partial class RelayServer : IAsyncDisposable
             {
                 await stream.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Decides whether to take one more connection, reserving its budget if so.
+    /// </summary>
+    /// <returns>
+    /// <see langword="false"/> with a reason when a limit is reached. Rejecting costs less
+    /// than accepting, which is the property that makes a limit worth having.
+    /// </returns>
+    private bool TryAdmit(IPAddress remoteAddress, out string rejection)
+    {
+        if (_clients.Count >= _options.MaximumClients)
+        {
+            rejection = "the server is at its client limit";
+            return false;
+        }
+
+        if (Interlocked.Increment(ref _pendingHandshakes) > _options.MaximumPendingHandshakes)
+        {
+            Interlocked.Decrement(ref _pendingHandshakes);
+            rejection = "too many connections are waiting to complete a handshake";
+            return false;
+        }
+
+        // AddOrUpdate rather than a read and a write: admission is decided on the accept loop
+        // and on every connection's own task at once.
+        int held = _connectionsPerAddress.AddOrUpdate(remoteAddress, 1, static (_, count) => count + 1);
+
+        if (held > _options.MaximumConnectionsPerAddress)
+        {
+            ReleaseAddress(remoteAddress);
+            Interlocked.Decrement(ref _pendingHandshakes);
+            rejection = "that address already holds its maximum number of connections";
+            return false;
+        }
+
+        rejection = string.Empty;
+        return true;
+    }
+
+    private void ReleaseAddress(IPAddress remoteAddress)
+    {
+        // Removed at zero rather than left behind, or the table becomes a record of every
+        // address that has ever connected.
+        if (_connectionsPerAddress.AddOrUpdate(remoteAddress, 0, static (_, count) => count - 1) <= 0)
+        {
+            _connectionsPerAddress.TryRemove(new KeyValuePair<IPAddress, int>(remoteAddress, 0));
         }
     }
 
@@ -213,6 +297,7 @@ public sealed partial class RelayServer : IAsyncDisposable
             clientNodeId,
             _options.SendQueueCapacity,
             _options.PacketsPerSecondPerClient,
+            _options.IdleTimeout,
             _options.TimeProvider);
 
         // One connection per identity. A node that reconnects — after a network change, or
@@ -238,6 +323,14 @@ public sealed partial class RelayServer : IAsyncDisposable
                 _clients.TryRemove(clientNodeId, out _);
             }
 
+            // Removing it from the table is not the same as releasing it. The client owns an
+            // idle timer, and a timer registered with a TimeProvider is rooted by the timer
+            // queue — so an undisposed client keeps itself, its connection and its 16 KiB
+            // send buffer alive for as long as the process runs, and the buffers still in its
+            // queue never go back to the array pool. On a server meant to stay up for months
+            // that is a leak proportional to the number of disconnections.
+            await client.DisposeAsync().ConfigureAwait(false);
+
             LogClientLeft(clientNodeId, _clients.Count);
         }
     }
@@ -249,9 +342,21 @@ public sealed partial class RelayServer : IAsyncDisposable
     {
         if (!_clients.TryGetValue(destination, out RelayClient? target))
         {
-            // Telling the sender immediately is what lets a dial fail in a second rather than
-            // waiting out a handshake timeout against a node that is simply not here.
-            return ValueTask.CompletedTask;
+            // Tells the sender the destination is not here. It is the one thing the relay
+            // reveals about who is connected, so it goes only to a client that already named
+            // the destination — it answers a question, it does not offer a directory.
+            //
+            // The client side is deliberately not wired up yet, and this is not an oversight
+            // to be tidied away later. Acting on PeerGone would let a relay end a dial by
+            // asserting a peer is absent — and the relay is explicitly untrusted, so that is
+            // a downgrade it must not be handed: a dial races the relay against direct
+            // addresses, and one of the racers cannot be allowed to eliminate the others.
+            // Using it safely means failing only the relay path while the direct candidates
+            // keep running, which is path management's job in M4. Until then the frame is
+            // sent, logged by the client, and acted on by nobody.
+            return _clients.TryGetValue(source, out RelayClient? sender)
+                ? sender.SendPeerGoneAsync(destination)
+                : ValueTask.CompletedTask;
         }
 
         target.Enqueue(source, body);
