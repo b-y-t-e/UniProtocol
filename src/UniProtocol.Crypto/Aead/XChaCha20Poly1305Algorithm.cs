@@ -85,6 +85,10 @@ public sealed class XChaCha20Poly1305Algorithm : IAeadAlgorithm
 
             if (nonce.Length != ExtendedNonceSizeInBytes)
             {
+                // Every path that returns false leaves the destination zeroed, including the
+                // ones that reject before any cryptography happens. A caller that has to
+                // remember which kind of failure it got has no contract at all.
+                CryptographicOperations.ZeroMemory(plaintext[..ciphertext.Length]);
                 return false;
             }
 

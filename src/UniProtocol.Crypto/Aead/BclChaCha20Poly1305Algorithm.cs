@@ -88,8 +88,12 @@ public sealed class BclChaCha20Poly1305Algorithm : IAeadAlgorithm
             ReadOnlySpan<byte> associatedData,
             Span<byte> plaintext)
         {
-            if (tag.Length != Poly1305.TagSizeInBytes)
+            // Checked here rather than left to the platform, which throws an exception type
+            // of its own choosing. Same rule as the managed cipher: a wrong-length nonce or
+            // tag is a failed decrypt, not something for a receive loop to catch.
+            if (nonce.Length != ChaCha20.NonceSizeInBytes || tag.Length != Poly1305.TagSizeInBytes)
             {
+                CryptographicOperations.ZeroMemory(plaintext[..ciphertext.Length]);
                 return false;
             }
 
@@ -100,7 +104,12 @@ public sealed class BclChaCha20Poly1305Algorithm : IAeadAlgorithm
             }
             catch (AuthenticationTagMismatchException)
             {
-                // Contract of IAeadCipher: a bad tag is a return value, not an exception.
+                // Contract of IAeadCipher: a bad tag is a return value, not an exception, and
+                // the destination is left zeroed. The platform implementation already clears
+                // it before throwing; doing it again here costs one pass over a buffer that
+                // has just been rejected and means the guarantee does not depend on an
+                // implementation detail of whichever OS crypto library is underneath.
+                CryptographicOperations.ZeroMemory(plaintext[..ciphertext.Length]);
                 return false;
             }
         }

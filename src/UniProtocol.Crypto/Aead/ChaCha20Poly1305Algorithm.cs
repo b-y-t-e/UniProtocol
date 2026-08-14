@@ -85,11 +85,15 @@ public sealed class ChaCha20Poly1305Algorithm : IAeadAlgorithm
             Span<byte> plaintext)
         {
             ObjectDisposedException.ThrowIf(_isDisposed, this);
-            ArgumentOutOfRangeException.ThrowIfNotEqual(nonce.Length, ChaCha20.NonceSizeInBytes);
             ArgumentOutOfRangeException.ThrowIfLessThan(plaintext.Length, ciphertext.Length);
 
-            if (tag.Length != Poly1305.TagSizeInBytes)
+            // Encrypt throws on a wrong-length nonce and TryDecrypt does not, which is the
+            // rule across every implementation: the encrypting side built the nonce, so a bad
+            // one there is unambiguously a bug, while the decrypting side has a channel for
+            // "this did not decrypt" and sits on a loop that serves every peer.
+            if (nonce.Length != ChaCha20.NonceSizeInBytes || tag.Length != Poly1305.TagSizeInBytes)
             {
+                CryptographicOperations.ZeroMemory(plaintext[..ciphertext.Length]);
                 return false;
             }
 
@@ -99,13 +103,20 @@ public sealed class ChaCha20Poly1305Algorithm : IAeadAlgorithm
             Span<byte> expectedTag = stackalloc byte[Poly1305.TagSizeInBytes];
             ComputeTag(oneTimeKey[..Poly1305.KeySizeInBytes], associatedData, ciphertext, expectedTag);
 
-            // Verify before decrypting: plaintext may alias ciphertext, and a forged
-            // packet must never be allowed to overwrite the caller's buffer.
+            // Verify before decrypting: plaintext may alias ciphertext, so a forged packet
+            // must not be turned into keystream over the caller's buffer.
             bool isAuthentic = CryptographicOperations.FixedTimeEquals(expectedTag, tag);
 
             if (isAuthentic)
             {
                 ChaCha20.Transform(_key, nonce, initialCounter: 1, ciphertext, plaintext);
+            }
+            else
+            {
+                // Zeroed rather than left alone, because that is what IAeadCipher promises
+                // and what the platform implementation does. Two ciphers behind one
+                // interface have to be interchangeable here or neither contract is real.
+                CryptographicOperations.ZeroMemory(plaintext[..ciphertext.Length]);
             }
 
             CryptographicOperations.ZeroMemory(oneTimeKey);
