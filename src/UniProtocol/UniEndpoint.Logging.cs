@@ -33,4 +33,16 @@ public sealed partial class UniEndpoint
         Level = LogLevel.Error,
         Message = "Dropping a packet that could not be processed.")]
     private partial void LogPacketProcessingFailed(Exception exception);
+
+    [LoggerMessage(
+        EventId = 1004,
+        Level = LogLevel.Debug,
+        Message = "Dropping a half-built session: the handshake reply to {Path} could not be sent.")]
+    private partial void LogHandshakeReplyFailed(PathEndpoint path, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1003,
+        Level = LogLevel.Warning,
+        Message = "This machine has {Found} local addresses; the ticket advertises the first {Kept}.")]
+    private partial void LogTicketAddressesTruncated(int found, int kept);
 }

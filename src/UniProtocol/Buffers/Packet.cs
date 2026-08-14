@@ -14,8 +14,20 @@ namespace UniProtocol.Buffers;
 /// allocation rate is still zero — which is the property that actually matters.
 /// </para>
 /// <para>
-/// Returning a packet twice, or using one after returning it, is a bug the pool detects in
-/// debug builds.
+/// Returning a packet twice, or using one after returning it, throws — but only while the
+/// packet is still on the free list. <strong>Once it has been rented again the checks go
+/// quiet</strong>, because the flag they read belongs to the packet, not to the reference
+/// that was supposed to have finished with it: a stale reference sees a rented packet and
+/// happily reads and writes the new owner's datagram, and a stale return hands a live packet
+/// back to the pool. On the receive path a packet is rented again within microseconds, so
+/// this is the common case rather than the rare one.
+/// </para>
+/// <para>
+/// So the checks catch the mistake that is easy to make — returning twice in a row, using a
+/// packet just after disposing it — and cannot catch the one that is hard to find. Treating
+/// them as a safety net is the error; the discipline that actually holds is that exactly one
+/// place owns a packet at a time, which is why <c>TryAcceptDataPacket</c> transfers ownership
+/// by return value rather than leaving it ambiguous.
 /// </para>
 /// </remarks>
 public sealed class Packet : IDisposable

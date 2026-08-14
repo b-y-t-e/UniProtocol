@@ -24,7 +24,8 @@ namespace UniProtocol.Protocol;
 /// to a different, visibly different, NodeId. What a ticket does need is integrity, and the
 /// checksum catches the accidental corruption that transcription introduces. Where
 /// contacting a node should itself require an invitation, the ticket carries a pairing
-/// token, and <em>that</em> is secret.
+/// token, and <em>that</em> is secret — but see <see cref="PairingToken"/>: the field is
+/// carried, not yet enforced.
 /// </para>
 /// <para>
 /// The addresses are hints that only work when the peer happens to be directly reachable.
@@ -60,8 +61,19 @@ public sealed record UniTicket
     private const byte ExpiryFlag = 0x01;
     private const byte PairingTokenFlag = 0x02;
     private const byte RelayFlag = 0x04;
+    /// <summary>
+    /// The most addresses a ticket can carry.
+    /// </summary>
+    /// <remarks>
+    /// Public because anyone assembling a ticket has to respect it. A machine with several
+    /// adapters — Wi-Fi, Ethernet, a hypervisor bridge, a VPN, IPv6 privacy addresses that
+    /// come and go — can easily hold more addresses than this, and a builder that hands them
+    /// all over would produce a ticket that <see cref="Encode"/> refuses. Past a handful the
+    /// extra candidates cost more to probe than they are worth anyway.
+    /// </remarks>
+    public const int MaximumAddressCount = 16;
+
     private const int ChecksumSizeInBytes = 2;
-    private const int MaximumAddressCount = 16;
     private const int MaximumRelayHostLength = 255;
 
     /// <summary>
@@ -93,8 +105,24 @@ public sealed record UniTicket
     public DateTimeOffset? ExpiresAt { get; init; }
 
     /// <summary>
-    /// A secret that authorises connecting, when the node accepts invited peers only.
+    /// A secret carried for a node that will accept invited peers only.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Nothing enforces this yet.</strong> The field is carried across the wire and
+    /// round-trips through <see cref="Encode"/> and <see cref="TryParse"/>, but no code
+    /// reads it when deciding whether to accept a handshake — a peer that presents no token,
+    /// or the wrong one, is accepted exactly like a peer that presents the right one. Setting
+    /// it today buys no access control whatsoever.
+    /// </para>
+    /// <para>
+    /// It exists now because the wire format is versioned and adding a field later is a
+    /// breaking change, whereas leaving a documented, unenforced one is not. Enforcement
+    /// arrives with <c>IAuthorizer</c>, which checks it during the handshake; until that
+    /// exists, a node that must restrict who may connect has to do it above this library, by
+    /// checking <see cref="Identity.NodeId"/> against its own list.
+    /// </para>
+    /// </remarks>
     public ReadOnlyMemory<byte> PairingToken { get; init; }
 
     /// <summary>

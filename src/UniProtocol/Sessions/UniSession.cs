@@ -161,7 +161,12 @@ internal sealed class UniSession : IDisposable
     /// </remarks>
     public bool TryDecrypt(ReadOnlySpan<byte> packet, Span<byte> destination, out int payloadLength)
     {
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        // No disposal check out here on purpose. A packet arriving for a session that has
+        // just closed is an ordinary race — the peer cannot know yet, and the receive loop
+        // serving every other peer must not take an exception for it. The one check that
+        // matters is inside the lock, where it is actually decisive; a check out here could
+        // only ever pass and then go stale a nanosecond later, which is the appearance of
+        // safety rather than safety.
         payloadLength = 0;
 
         if (!DataPacketHeader.TryRead(packet, out DataPacketHeader header)

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using UniProtocol.Abstractions;
 using UniProtocol.Protocol;
 using UniProtocol.Protocol.Packets;
 using UniProtocol.Protocol.Identity;
@@ -264,6 +265,161 @@ public sealed class UniEndpointTests
         await forgery;
     }
 #pragma warning restore RS0030
+
+    [Fact]
+    public async Task DisposeAsync_OnAConnection_StopsTheEndpointRoutingToIt()
+    {
+        // Nothing removed a closed connection from the dispatch table, so a node that dialled
+        // a thousand peers over its lifetime kept a thousand dead sessions — each with its
+        // keys, its replay window and its queued packets — until the process ended.
+        using CancellationTokenSource cancellation = new(Timeout);
+
+        await using UniEndpoint server = CreateEndpoint();
+        await using UniEndpoint client = CreateEndpoint();
+
+        Task<UniConnection> acceptTask = server.AcceptAsync(cancellation.Token).AsTask();
+
+        UniConnection outbound = await client.ConnectAsync(
+            server.NodeId,
+            LoopbackAddressOf(server),
+            cancellation.Token);
+
+        UniConnection inbound = await acceptTask;
+
+        Assert.Equal(1, client.ConnectionCount);
+        Assert.Equal(1, server.ConnectionCount);
+
+        await outbound.DisposeAsync();
+        await inbound.DisposeAsync();
+
+        Assert.Equal(0, client.ConnectionCount);
+        Assert.Equal(0, server.ConnectionCount);
+
+        // The identifier goes back too, so a long-lived endpoint does not slowly consume the
+        // space it draws them from.
+        Assert.Equal(0, client.ReservedSessionIndexCount);
+        Assert.Equal(0, server.ReservedSessionIndexCount);
+    }
+
+    [Fact]
+    public async Task SendDatagramAsync_AfterThePeerClosed_DoesNotFaultTheReceiveLoop()
+    {
+        // Packets keep arriving for a connection that has just closed — the peer cannot know
+        // yet. Dispatching them must be a no-op, not an exception on the loop that serves
+        // every other peer.
+        using CancellationTokenSource cancellation = new(Timeout);
+
+        await using UniEndpoint server = CreateEndpoint();
+        await using UniEndpoint client = CreateEndpoint();
+
+        Task<UniConnection> acceptTask = server.AcceptAsync(cancellation.Token).AsTask();
+
+        UniConnection outbound = await client.ConnectAsync(
+            server.NodeId,
+            LoopbackAddressOf(server),
+            cancellation.Token);
+
+        UniConnection inbound = await acceptTask;
+
+        await inbound.DisposeAsync();
+
+        // Straight at a closed session, several times over.
+        for (int i = 0; i < 10; i++)
+        {
+            await outbound.SendDatagramAsync("orphan"u8.ToArray(), cancellation.Token);
+        }
+
+        // The server's loop is still alive: a second connection still works.
+        Task<UniConnection> secondAccept = server.AcceptAsync(cancellation.Token).AsTask();
+
+        await using UniConnection second = await client.ConnectAsync(
+            server.NodeId,
+            LoopbackAddressOf(server),
+            cancellation.Token);
+
+        await using UniConnection secondInbound = await secondAccept;
+
+        await second.SendDatagramAsync("alive"u8.ToArray(), cancellation.Token);
+
+        byte[] buffer = new byte[1500];
+        int received = await secondInbound.ReceiveDatagramAsync(buffer, cancellation.Token);
+
+        Assert.Equal("alive"u8.ToArray(), buffer[..received]);
+
+        await outbound.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CreateTicket_OnAWildcardBoundEndpoint_NeverProducesATicketItCannotEncode()
+    {
+        // CreateTicket advertises every local address, and a ticket has room for sixteen. A
+        // machine with enough adapters — Wi-Fi, Ethernet, a hypervisor bridge, a VPN, IPv6
+        // privacy addresses — would build a ticket its own encoder refuses, taking mDNS
+        // advertisement and `unip listen` down with it. Being well connected is not an error.
+        UniEndpoint endpoint = UniEndpoint.Create(new UniEndpointOptions
+        {
+            Identity = UniIdentity.Generate(),
+            ListenEndPoint = new IPEndPoint(IPAddress.Any, 0),
+        });
+
+        UniTicket ticket = endpoint.CreateTicket();
+
+        Assert.True(
+            ticket.Addresses.Count <= UniTicket.MaximumAddressCount,
+            $"the ticket carries {ticket.Addresses.Count} addresses");
+
+        // Encoding is the operation that would have thrown.
+        Assert.StartsWith(UniTicket.UriPrefix, ticket.ToString(), StringComparison.Ordinal);
+
+        await endpoint.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WithACallerSuppliedRelayTransport_LeavesItOpen()
+    {
+        // Ownership was one flag for every transport, so an endpoint that bound its own UDP
+        // socket also closed the relay the caller had connected and was still holding.
+        using CancellationTokenSource cancellation = new(Timeout);
+
+        CountingTransport relay = new();
+
+        await using (UniEndpoint endpoint = UniEndpoint.Create(new UniEndpointOptions
+        {
+            Identity = UniIdentity.Generate(),
+            ListenEndPoint = new IPEndPoint(IPAddress.Loopback, 0),
+            RelayTransport = relay,
+        }))
+        {
+            Assert.Equal(0, relay.DisposeCount);
+        }
+
+        Assert.Equal(0, relay.DisposeCount);
+    }
+
+    /// <summary>A transport that does nothing but count how often it is closed.</summary>
+    private sealed class CountingTransport : IPacketTransport
+    {
+        public int DisposeCount { get; private set; }
+
+        public NetworkAddress LocalAddress => default;
+
+        public PathKind SupportedPathKind => PathKind.Relay;
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> payload, PathEndpoint destination, CancellationToken cancellationToken)
+            => ValueTask.CompletedTask;
+
+        public async ValueTask<PacketReceiveResult> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, TimeProvider.System, cancellationToken);
+            return default;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static NetworkAddress LoopbackAddressOf(UniEndpoint endpoint)
         => NetworkAddress.FromIPEndPoint(new IPEndPoint(IPAddress.Loopback, endpoint.LocalAddress.Port));

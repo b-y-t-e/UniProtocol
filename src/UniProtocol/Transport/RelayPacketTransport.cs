@@ -325,6 +325,21 @@ public sealed partial class RelayPacketTransport : IPacketTransport
         {
             RelayFrame frame = await connection.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
 
+            // Logged rather than acted on. A relay saying "that peer is not here" is a
+            // useful hint and an untrusted one: acting on it would let a relay end a dial
+            // that the direct candidates racing alongside it were about to win. Failing the
+            // relay path alone, while the rest keep running, is path management's job.
+            if (frame.Type == RelayFrameType.PeerGone && frame.PayloadLength >= NodeId.SizeInBytes)
+            {
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    NodeId absent = NodeId.FromPublicKey(buffer.AsSpan(1, NodeId.SizeInBytes));
+                    LogPeerGone(absent);
+                }
+
+                continue;
+            }
+
             if (frame.Type != RelayFrameType.ReceivePacket || frame.PayloadLength <= NodeId.SizeInBytes)
             {
                 continue;
@@ -365,6 +380,12 @@ public sealed partial class RelayPacketTransport : IPacketTransport
 
     [LoggerMessage(EventId = 4001, Level = LogLevel.Warning, Message = "Relay {Host}:{Port} is unavailable: {Reason}.")]
     private partial void LogRelayUnavailable(string host, int port, string reason);
+
+    [LoggerMessage(
+        EventId = 4002,
+        Level = LogLevel.Debug,
+        Message = "The relay reports that {NodeId} is not connected to it.")]
+    private partial void LogPeerGone(NodeId nodeId);
 
     private readonly record struct ReceivedPacket(NodeId Source, byte[] Body, int Length)
     {

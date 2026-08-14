@@ -57,7 +57,8 @@ public sealed class UniConnection : IAsyncDisposable
     private PathEndpoint _remotePath;
     private byte[]? _cachedHandshakeResponse;
     private int _cachedHandshakeResponseLength;
-    private volatile bool _isDisposed;
+    /// <summary>Non-zero once <see cref="DisposeAsync"/> has run; an int so the transition is atomic.</summary>
+    private int _disposeState;
 
     internal UniConnection(
         PacketRouter router,
@@ -134,6 +135,18 @@ public sealed class UniConnection : IAsyncDisposable
 
     internal uint RemoteIndex => _session.RemoteIndex;
 
+    /// <summary>
+    /// Invoked once when the connection closes, so the endpoint can stop routing to it.
+    /// </summary>
+    /// <remarks>
+    /// Without this the endpoint's dispatch table only ever grows: a long-running node that
+    /// dials a thousand peers holds a thousand dead sessions, their keys, their replay
+    /// windows and their queues, for as long as the process lives.
+    /// </remarks>
+    internal Action<UniConnection>? Closed { get; set; }
+
+    private bool IsDisposed => Volatile.Read(ref _disposeState) != 0;
+
     /// <summary>Encrypts and sends a datagram.</summary>
     /// <remarks>
     /// Delivery is not guaranteed and datagrams may arrive out of order. Duplicates are
@@ -141,7 +154,7 @@ public sealed class UniConnection : IAsyncDisposable
     /// </remarks>
     public async ValueTask SendDatagramAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
 
         if (payload.Length > MaxDatagramSize)
         {
@@ -162,7 +175,7 @@ public sealed class UniConnection : IAsyncDisposable
     /// <returns>The number of bytes written.</returns>
     public async ValueTask<int> ReceiveDatagramAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
 
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -207,6 +220,15 @@ public sealed class UniConnection : IAsyncDisposable
     /// </returns>
     internal bool TryAcceptDataPacket(Packet packet)
     {
+        // A packet for a connection that has just closed is an ordinary network event — the
+        // peer cannot know yet — so it is dropped, not raised as an error. Letting the
+        // session throw here would put an exception on the receive loop that serves every
+        // other peer.
+        if (IsDisposed)
+        {
+            return false;
+        }
+
         // Decrypted in place: the plaintext is written exactly over the ciphertext it came
         // from, so the destination and source start at the same offset. That is the only
         // form of overlap every AEAD implementation guarantees to support, and it means a
@@ -259,12 +281,23 @@ public sealed class UniConnection : IAsyncDisposable
     /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
-        if (_isDisposed)
+        Close();
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Closes the connection. Everything a close does is synchronous, so callers that are not
+    /// themselves asynchronous do not have to pretend otherwise.
+    /// </summary>
+    internal void Close()
+    {
+        // Exchange, not a read followed by a write: two threads closing at once must not
+        // both tear the session down and both raise Closed.
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
-        _isDisposed = true;
         _closed.Cancel();
         _received.Writer.TryComplete();
 
@@ -276,6 +309,6 @@ public sealed class UniConnection : IAsyncDisposable
         _session.Dispose();
         _closed.Dispose();
 
-        return ValueTask.CompletedTask;
+        Closed?.Invoke(this);
     }
 }
