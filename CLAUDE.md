@@ -53,6 +53,13 @@ meaning and know that an old peer refused rather than quietly accepted.
 - **In-place decryption only at the same offset** for source and destination. That is the
   only form of overlap every AEAD implementation guarantees, and it is why `Packet.Offset`
   exists.
+- **Every `IAeadCipher` must fail identically.** On a rejected packet the destination is
+  zeroed, and a wrong-length nonce or tag is a `false` from `TryDecrypt` while `Encrypt`
+  throws on the same input. None of this is arbitrary: "leave the destination alone" is a
+  promise only the managed cipher could keep, because the platform one clears the buffer
+  before reporting a bad tag. Three implementations once answered a wrong-length nonce three
+  different ways. `AeadCipherContractTests` is parameterised over every implementation and is
+  what keeps them substitutable — it caught two holes in the fix that introduced it.
 - **Authenticate before updating the replay window.** The other way round, an attacker
   advances the window with a forged counter and genuine packets start being rejected.
 - **Deduplicate handshakes by the Noise ephemeral key**, not by source address. Parallel
