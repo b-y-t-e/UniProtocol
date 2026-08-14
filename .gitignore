@@ -45,3 +45,6 @@ appsettings.Local.json
 ## OS
 .DS_Store
 Thumbs.db
+
+# mTiles workspace state
+.mterminal/
