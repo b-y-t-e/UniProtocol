@@ -54,6 +54,20 @@ nadać znaczenie i wiedzieć, że stary peer odmówił, a nie po cichu przyjął
   okno sfałszowanym licznikiem i prawdziwe pakiety zaczną być odrzucane.
 - **Deduplikacja handshake'u po kluczu efemerycznym Noise**, nie po adresie źródłowym.
   Sondowanie równoległe dostarcza tę samą próbę z wielu adresów.
+- **Pętli odbioru jest tyle, ile transportów — nie jedna.** Sesja niosąca ruch przez relay
+  i przez adres bezpośredni jest odszyfrowywana z dwóch wątków naraz. Stąd locki w
+  `UniSession` i `ConcurrentDictionary` na próby handshake'u. Każde „to i tak chodzi z
+  jednego wątku" w tej warstwie jest fałszywe.
+- **Nieudany odczyt wiadomości Noise musi być bezskutkowy.** `TryReadMessage` miesza klucz
+  efemeryczny i wyniki DH, zanim może stwierdzić fałszerstwo, a pakiet handshake'u
+  uwierzytelnia tylko `mac1` liczony z klucza *publicznego*. Bez snapshotu stanu jeden
+  pakiet od obserwatora na ścieżce trwale zabija połączenie, które i tak by się udało.
+- **Klucz tożsamości zapisuje się przez plik tymczasowy i `File.Move`.** To jedyne miejsce
+  w tej bazie, gdzie przerwany zapis niszczy coś bezpowrotnie: obcięty `node.key` unieważnia
+  każdy wydany ticket, a `relay.key` — każdego klienta, który przypiął ten klucz.
+- **Dane z sieci lub od człowieka nie trafiają na `stackalloc` bez ograniczenia długości.**
+  Ticket przychodzi z wiersza poleceń; `stackalloc` proporcjonalny do jego długości to
+  przepełnienie stosu, którego żaden `catch` nie złapie.
 - **Globy w `.editorconfig`: `**.cs`, nie `**/*.cs`** — to drugie pomija pliki leżące
   bezpośrednio w katalogu projektu.
 

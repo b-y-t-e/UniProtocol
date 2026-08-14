@@ -55,6 +55,7 @@ Wczesny etap. Zaimplementowane i zweryfikowane wektorami testowymi:
 | Tożsamość (NodeId, keystore, CLI) | gotowe |
 | Warstwa pakietowa, sesja UDP, datagramy | gotowe |
 | Parowanie: ticket, mDNS | gotowe |
+| Autoryzacja („tylko zaproszeni") — pole `PairingToken` istnieje, **nic go nie sprawdza** | w planach (`IAuthorizer`) |
 | **Relay — łączność z dowolnej sieci, także za NAT** | **gotowe** |
 | Strumienie, niezawodność, kontrola przeciążenia | w planach (M2) |
 | Hole punching i ścieżki bezpośrednie | w planach (M4) |
@@ -95,6 +96,7 @@ unip dial <nodeid> <adres>        # połącz się jawnym adresem
 unip dial --discover              # połącz się z jedynym węzłem w LAN
 
 unipd --host <nazwa-publiczna>    # serwer relay; wypisuje swój adres unipr://
+     [--advertise-port <n>]       # port, na który pukają klienci, gdy inny niż nasłuchiwany
 ```
 
 Wyniki trafiają na stdout, komunikaty na stderr, więc `unip listen > ticket.txt` zapisuje
@@ -127,8 +129,13 @@ natychmiastowy, czytelny błąd zamiast dziesięciosekundowego timeoutu.
 Ticket **nie jest tajny**. Tożsamość w nim to klucz publiczny, więc jego znajomość pozwala
 się *skontaktować*, nigdy podszyć: podmiana ticketu w locie nie daje MITM, daje połączenie
 z innym, widocznie innym NodeId. Ticket potrzebuje integralności, nie poufności — i od tego
-jest suma kontrolna. Tajny jest wyłącznie token parowania, jeśli węzeł przyjmuje tylko
-zaproszonych.
+jest suma kontrolna.
+
+Ticket niesie też pole na token parowania, ale **żaden kod go dziś nie sprawdza**: peer bez
+tokenu jest przyjmowany dokładnie tak samo jak peer z prawidłowym. Pole jest w formacie od
+początku, bo dodanie go później łamie wersję wire, a nieegzekwowane — nie. Kto musi
+ograniczyć, kto się połączy, robi to na razie nad biblioteką, porównując `NodeId` z własną
+listą.
 
 Wszystkie adresy z ticketu są sondowane **równolegle**, a wygrywa pierwszy, który odpowie.
 Maszyna z Wi-Fi, Ethernetem i wirtualną kartą ogłasza kilka adresów i większość jest
@@ -167,6 +174,18 @@ Relay jest celowo głupi: uczy się, który węzeł jest na którym połączeniu
 nieprzezroczyste bajty. Nie trzyma kluczy peerów, nie terminuje sesji, widzi wyłącznie
 NodeId i szyfrogram. Skompromitowany relay może gubić ruch i widzieć, kto z kim rozmawia —
 nie może go odczytać ani sfałszować.
+
+Stoi na porcie 443 wystawiony na świat, więc limity są od pierwszego dnia, nie doklejone
+później: 10 000 uwierzytelnionych klientów, 512 połączeń czekających na handshake (to ten
+limit spotyka zalew, bo połączenie nieuwierzytelnione nie liczy się do pierwszego),
+64 połączenia z jednego adresu, 1000 pakietów na sekundę na klienta, kolejka 256 pakietów
+i rozłączenie po 90 s ciszy. Wszystkie są w `RelayServerOptions`.
+
+Limit per adres jest tylko podniesieniem kosztu, nie obroną: za CGNAT-em, firmowym wyjściem
+czy proxy tysiące niepowiązanych klientów dzieli jeden adres i limit odetnie uczciwe
+urządzenia, a napastnik z własnym /64 IPv6 po prostu zmieni adres. Pod zalewem trzyma limit
+globalny (`MaximumPendingHandshakes`). Jeśli twoi klienci siedzą za wspólnym adresem —
+podnieś go albo wyłącz, ustawiając `int.MaxValue`.
 
 ## Serwer relay
 

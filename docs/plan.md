@@ -16,6 +16,7 @@
 > | **STUN przesunięty do M4** | Służy ścieżkom bezpośrednim, nie łączności przez relay. |
 > | **Public API Analyzer odłożony do M7** | Ręczne utrzymywanie `PublicAPI.Shipped.txt` przez całe 0.x to koszt bez korzyści. Do tego czasu: „domyślnie `internal`". |
 > | **BLAKE2b pominięty** | Nic go nie używa; Noise wymaga tylko BLAKE2s. |
+> | **`UniSession` używa locków, wbrew „brak locków w hot path"** | Reguła zakładała aktora z jedną pętlą na połączenie. Dziś pętli odbioru jest tyle, ile transportów, a `SendDatagramAsync` jest publiczne — bez synchronizacji dwóch nadawców bierze ten sam licznik i powtarza nonce. Lock znika, gdy w M2 powstanie pętla połączenia. |
 
 ## Context
 
